@@ -1,7 +1,7 @@
 import { useMemo, useSyncExternalStore } from 'react';
 import type * as Legacy from './workflow.contract';
 export type { InstitutionType, Party, Person, FundingStatus, FundingRecord, ReviewStatus, ReviewReply, ProjectReview, ProofAttachment, ProofEntry, RequestStatus, CollabRequest, NewCollabRequest, StudentProject, ShareProfile, ProblemStatement, TeamMember, RegisteredStudent } from './workflow.contract';
-import { getUser, resource } from '../integration/api';
+import { getUser } from '../integration/api';
 import { readRecords, subscribeRecords, mutate } from '../integration/records';
 import type { Project, Share } from '../integration/records';
 type Bag = Record<string, unknown>;
@@ -15,7 +15,7 @@ function identity(id?: string) {
 }
 export let CURRENT_STUDENT = identity() as typeof Legacy.CURRENT_STUDENT;
 export let CURRENT_FACULTY = identity() as typeof Legacy.CURRENT_FACULTY;
-export let CURRENT_INDUSTRY = identity() as typeof Legacy.CURRENT_INDUSTRY;
+export let CURRENT_INDUSTRY = identity() as unknown as typeof Legacy.CURRENT_INDUSTRY;
 export let CONTACTS = [] as unknown as typeof Legacy.CONTACTS;
 export let TEAM_DIRECTORY = {} as typeof Legacy.TEAM_DIRECTORY;
 function project(p: Project) {
@@ -39,7 +39,7 @@ let cached = snapshot();
 subscribeRecords(() => {
   CURRENT_STUDENT = identity() as typeof Legacy.CURRENT_STUDENT;
   CURRENT_FACULTY = identity() as typeof Legacy.CURRENT_FACULTY;
-  CURRENT_INDUSTRY = identity() as typeof Legacy.CURRENT_INDUSTRY;
+  CURRENT_INDUSTRY = identity() as unknown as typeof Legacy.CURRENT_INDUSTRY;
   const contacts = readRecords().users.map(u => identity(u.id));
     CONTACTS = Object.assign(contacts, { students: contacts.filter(u => u.role === 'student'), mentors: contacts.filter(u => ['mentor', 'faculty', 'industry'].includes(u.role)) }) as unknown as typeof Legacy.CONTACTS;
   TEAM_DIRECTORY = Object.fromEntries(readRecords().projects.map(p => [p.team?.name || p.team_name || '', { leader: identity(p.team?.leader_id || p.leader_id), members: (p.memberships || []).filter(m => m.status === 'Member').map(m => identity(m.user_id)) }])) as unknown as typeof Legacy.TEAM_DIRECTORY;
@@ -54,20 +54,20 @@ export function latestFunding(...args: Parameters<typeof Legacy.latestFunding>) 
 export function getTeamLeader(...args: Parameters<typeof Legacy.getTeamLeader>) { const p = readRecords().projects.find(p => (p.team?.name || p.team_name) === args[0]); return identity(p?.team?.leader_id || p?.leader_id) as ReturnType<typeof Legacy.getTeamLeader>; }
 export function isMemberOf(...args: Parameters<typeof Legacy.isMemberOf>) { return readRecords().projects.some(p => (p.team?.name || p.team_name) === args[0] && p.memberships?.some(m => m.user_id === args[1] && m.status === 'Member')); }
 export function teamFormationRule(...args: Parameters<typeof Legacy.teamFormationRule>) { const members = args[0]; const sameSchool = members.length > 0 && members.every(m => m.type === 'School' && m.institution === members[0].institution); return { formedBy: sameSchool ? 'faculty' : 'student', note: sameSchool ? 'Same-school teams must be formed by faculty.' : 'Student-led team. School-only teams need a mentor.' } as ReturnType<typeof Legacy.teamFormationRule>; }
-function command(path: string, method: string, body?: unknown) { void mutate(path, method, body).catch(() => undefined); }
-export function respondFunding(...args: Parameters<typeof Legacy.respondFunding>) { command(`/funding/${args[0]}/respond`, 'POST', { status: args[1], receipt_confirmed: args[1] === 'confirmed', decline_note: args[2] || '' }); }
-export function submitFunding(...args: Parameters<typeof Legacy.submitFunding>) { const a = bag(args[0]); command(`/projects/${str(bag(a.project).id)}/funding`, 'POST', { amount_lakh: String(a.amountLakh), txn_ref: a.txnRef, proof_file_name: a.proofFile || '', transfer_confirmed: true }); }
-export function addReview(...args: Parameters<typeof Legacy.addReview>) { const a = bag(args[0]); command(`/projects/${str(a.projectId)}/reviews`, 'POST', { summary: a.summary, strengths: a.strengths || '', flaws: a.flaws, improvements: a.improvements }); }
-export function addReply(...args: Parameters<typeof Legacy.addReply>) { const a = bag(args[1]); command(`/reviews/${args[0]}/replies`, 'POST', { body: a.text, action: args[2] === 'resolved' ? 'resolve' : args[2] === 'open' ? 'request_changes' : args[2] === 'addressed' ? 'changes_done' : 'comment' }); }
-export function addProof(...args: Parameters<typeof Legacy.addProof>) { const a = bag(args[0]); command(`/projects/${str(a.projectId)}/proofs`, 'POST', { title: a.title, description: a.description || '', attachments: (Array.isArray(a.attachments) ? a.attachments : []).map(value => { const v = bag(value); return { kind: v.kind, url: v.url, name: v.name || '', source: 'external' }; }) }); }
-export function removeProof(...args: Parameters<typeof Legacy.removeProof>) { command(`/proofs/${args[0]}`, 'DELETE'); }
-export function publishProblem(...args: Parameters<typeof Legacy.publishProblem>) { const a = bag(args[0]); command('/problems', 'POST', { title: a.title, description: a.description, domain: a.domain, tags: a.tags, csr: a.csr, status: 'published' }); }
-export function markProblemSeen(...args: Parameters<typeof Legacy.markProblemSeen>) { command(`/problems/${args[0]}`, 'GET'); }
-export function toggleShortlist(...args: Parameters<typeof Legacy.toggleShortlist>) { command(`/problems/${args[0]}/shortlist`, 'PUT', { shortlisted: !readRecords().problems.find(p => p.id === args[0])?.shortlisted_at }); }
-export function respondCollab(...args: Parameters<typeof Legacy.respondCollab>) { command(`/requests/${args[0]}/respond`, 'POST', { status: args[1] }); }
+async function command(path: string, method: string, body?: unknown) { return await mutate(path, method, body); }
+export async function respondFunding(..._args: Parameters<typeof Legacy.respondFunding>) { throw new Error('Use the funding decision form with explicit receipt confirmation.'); }
+export async function submitFunding(..._args: Parameters<typeof Legacy.submitFunding>) { throw new Error('Use the industry transfer form with explicit transfer confirmation.'); }
+export function addReview(...args: Parameters<typeof Legacy.addReview>) { const a = bag(args[0]); return command(`/projects/${str(a.projectId)}/reviews`, 'POST', { summary: a.summary, strengths: a.strengths || '', flaws: a.flaws, improvements: a.improvements }); }
+export function addReply(...args: Parameters<typeof Legacy.addReply>) { const a = bag(args[1]); return command(`/reviews/${args[0]}/replies`, 'POST', { body: a.text, action: args[2] === 'resolved' ? 'resolve' : args[2] === 'open' ? 'request_changes' : args[2] === 'addressed' ? 'changes_done' : 'comment' }); }
+export function addProof(...args: Parameters<typeof Legacy.addProof>) { const a = bag(args[0]); return command(`/projects/${str(a.projectId)}/proofs`, 'POST', { title: a.title, description: a.description || '', attachments: (Array.isArray(a.attachments) ? a.attachments : []).map(value => { const v = bag(value); return { kind: v.kind, url: v.url, name: v.name || '', source: 'external' }; }) }); }
+export function removeProof(...args: Parameters<typeof Legacy.removeProof>) { return command(`/proofs/${args[0]}`, 'DELETE'); }
+export function publishProblem(...args: Parameters<typeof Legacy.publishProblem>) { const a = bag(args[0]); return command('/problems', 'POST', { title: a.title, description: a.description, domain: a.domain, tags: a.tags, csr: a.csr, status: 'published' }); }
+export function markProblemSeen(...args: Parameters<typeof Legacy.markProblemSeen>) { return command(`/problems/${args[0]}`, 'GET'); }
+export function toggleShortlist(...args: Parameters<typeof Legacy.toggleShortlist>) { return command(`/problems/${args[0]}/shortlist`, 'PUT', { shortlisted: !readRecords().problems.find(p => p.id === args[0])?.shortlisted_at }); }
+export function respondCollab(...args: Parameters<typeof Legacy.respondCollab>) { return command(`/requests/${args[0]}/respond`, 'POST', { status: args[1] }); }
 export async function createProject(...args: Parameters<typeof Legacy.createProject>) { const a = bag(args[0]); const members = Array.isArray(a.team) ? a.team.map(m => str(bag(m).id)) : []; const p = await mutate<Project>('/projects', 'POST', { name: a.teamName || a.title, title: a.title, description: a.description, category: a.category, leader_id: a.leaderId || getUser()?.id, student_ids: members, reason: a.reason || 'Please collaborate with our project team.', ...(a.mentorId ? { mentor_id: a.mentorId } : {}) }); return p.id; }
 export async function addRequests(...args: Parameters<typeof Legacy.addRequests>) { for (const request of args[0]) { const r = bag(request); await mutate(`/projects/${str(r.projectId)}/requests`, 'POST', { recipient_id: bag(r.to).id, kind: r.kind, reason: r.reason }); } }
 export function ensureProfile(..._args: Parameters<typeof Legacy.ensureProfile>) { const share = readRecords().share; const owner = identity(); return { ownerId: owner.id, name: owner.name, institution: owner.institution, slug: share?.slug || '', enabled: share?.enabled || false } as ReturnType<typeof Legacy.ensureProfile>; }
-export function setProfileEnabled(...args: Parameters<typeof Legacy.setProfileEnabled>) { command('/portfolio/share', 'PUT', { enabled: args[1] }); }
-export function regenerateSlug(...args: Parameters<typeof Legacy.regenerateSlug>): ReturnType<typeof Legacy.regenerateSlug> { command('/portfolio/share', 'PUT', { enabled: readRecords().share?.enabled || false, regenerate: true }); return ensureProfile(...args as Parameters<typeof Legacy.ensureProfile>) as unknown as ReturnType<typeof Legacy.regenerateSlug>; }
-export async function registerStudent(...args: Parameters<typeof Legacy.registerStudent>): Promise<ReturnType<typeof Legacy.registerStudent>> { const a = bag(args[0]); const user = await resource<Bag>('/users', 'POST', { email: a.email, password: a.password, display_name: a.name, role: 'student', institution_id: getUser()?.institution_id }); return { ...user, id: user.id, virtualId: user.virtual_id, name: user.display_name, linkedin: user.linkedin_url, institution: identity().institution } as unknown as ReturnType<typeof Legacy.registerStudent>; }
+export function setProfileEnabled(...args: Parameters<typeof Legacy.setProfileEnabled>) { return command('/portfolio/share', 'PUT', { enabled: args[1] }); }
+export async function regenerateSlug(...args: Parameters<typeof Legacy.regenerateSlug>): Promise<ReturnType<typeof Legacy.regenerateSlug>> { await mutate<Share>('/portfolio/share', 'PUT', { enabled: readRecords().share?.enabled || false, regenerate: true }); return ensureProfile(...args as Parameters<typeof Legacy.ensureProfile>) as unknown as ReturnType<typeof Legacy.regenerateSlug>; }
+export async function registerStudent(...args: Parameters<typeof Legacy.registerStudent>): Promise<ReturnType<typeof Legacy.registerStudent>> { const a = bag(args[0]); const user = await mutate<Bag>('/users', 'POST', { email: a.email, password: a.password, display_name: a.name, role: 'student', institution_id: getUser()?.institution_id }); return { ...user, id: user.id, virtualId: user.virtual_id, name: user.display_name, linkedin: user.linkedin_url, institution: identity().institution } as unknown as ReturnType<typeof Legacy.registerStudent>; }

@@ -27,10 +27,10 @@ export async function request<T>(path: string, method = 'GET', body?: unknown): 
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 20000);
   try {
-    const response = await fetch(`${base}${path}`, { method, signal: controller.signal, cache: 'no-store', headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    const response = await fetch(`${base}${path}`, { method, signal: controller.signal, cache: 'no-store', headers: { ...(token && !path.startsWith('/public/') ? { Authorization: `Bearer ${token}` } : {}), ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
     const payload = await response.json();
     if (!response.ok) {
-      if (response.status === 401 && !path.startsWith('/auth/login')) clearSession();
+      if (response.status === 401 && !path.startsWith('/auth/login') && !path.startsWith('/public/')) clearSession();
       const details = (payload.error?.details || []).map((d: { msg?: string; message?: string }) => d.msg || d.message || '').filter(Boolean).join('; ');
       throw new ApiError(response.status, `${payload.error?.message || 'Request failed'}${details ? `: ${details}` : ''}`, payload.error?.code, payload.request_id);
     }

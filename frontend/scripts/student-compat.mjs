@@ -3,7 +3,7 @@
 import ts from 'typescript';
 import fs from 'node:fs';
 import path from 'node:path';
-const asynchronous = new Set(['createProject', 'addRequests', 'registerStudent']);
+const asynchronous = new Set(['createProject', 'addRequests', 'registerStudent', 'respondFunding', 'submitFunding', 'addReview', 'addReply', 'addProof', 'removeProof', 'publishProblem', 'markProblemSeen', 'toggleShortlist', 'respondCollab', 'setProfileEnabled', 'regenerateSlug']);
 function transformFile(filename) {
   const source = ts.createSourceFile(filename, fs.readFileSync(filename, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   let changed = false;
