@@ -1,0 +1,248 @@
+{
+  "version": 4,
+  "app_title": "InnovateX Backend Integration Plan",
+  "nav": {
+    "placement": "none",
+    "items": []
+  },
+  "pages": [
+    {
+      "id": "page-435d7adf",
+      "name": "Sign in and registration",
+      "route": "/login",
+      "item_ref": {
+        "index": 2,
+        "text": "Connect the React student experience to the API: authentication, Discover, project/team creation, collaboration requests, Action Center, reviews, funding confirmation, proof of work, portfolio sharing, settings, loading/error/empty states, and removal of localStorage demo mutations. Preserve InnovateX’s existing role-shell visual language and information-dense campus collaboration UI rather than redesigning it."
+      },
+      "blocks": [
+        {
+          "id": "auth-hero",
+          "type": "hero",
+          "label": "InnovateX identity panel",
+          "hint": "Campus-industry collaboration message and role-aware Virtual ID motif",
+          "x": 0,
+          "y": 0,
+          "w": 5,
+          "h": 8,
+          "item_ref": {
+            "index": 2,
+            "text": "Connect the React student experience to the API: authentication, Discover, project/team creation, collaboration requests, Action Center, reviews, funding confirmation, proof of work, portfolio sharing, settings, loading/error/empty states, and removal of localStorage demo mutations. Preserve InnovateX’s existing role-shell visual language and information-dense campus collaboration UI rather than redesigning it."
+          },
+          "type_source": "palette"
+        },
+        {
+          "id": "auth-form",
+          "type": "form",
+          "label": "Email and password access",
+          "hint": "Sign in and registration fields, role selection where permitted, validation, recovery link, and submit states",
+          "x": 5,
+          "y": 0,
+          "w": 7,
+          "h": 8,
+          "item_ref": {
+            "index": 2,
+            "text": "Connect the React student experience to the API: authentication, Discover, project/team creation, collaboration requests, Action Center, reviews, funding confirmation, proof of work, portfolio sharing, settings, loading/error/empty states, and removal of localStorage demo mutations. Preserve InnovateX’s existing role-shell visual language and information-dense campus collaboration UI rather than redesigning it."
+          },
+          "type_source": "palette"
+        }
+      ],
+      "deleted_ids": []
+    },
+    {
+      "id": "page-a968d982",
+      "name": "Student workspace",
+      "route": "/student/dashboard",
+      "item_ref": {
+        "index": 3,
+        "text": "Connect the industry, faculty, and public experiences to the API: problem publishing and shortlisting, project discovery, mandatory reviews, funding, student registration, faculty team formation, change requests, review panels, CSR data, public portfolio slugs, and cross-role refresh behavior; finish with end-to-end authorization and workflow validation."
+      },
+      "blocks": [
+        {
+          "id": "student-nav",
+          "type": "sidebar",
+          "label": "Student navigation",
+          "hint": "Dashboard, Discover, Projects, Reviews, Actions, Funding, Portfolio, Settings, Leaderboard",
+          "x": 0,
+          "y": 0,
+          "w": 3,
+          "h": 12,
+          "item_ref": {
+            "index": 3,
+            "text": "Connect the industry, faculty, and public experiences to the API: problem publishing and shortlisting, project discovery, mandatory reviews, funding, student registration, faculty team formation, change requests, review panels, CSR data, public portfolio slugs, and cross-role refresh behavior; finish with end-to-end authorization and workflow validation."
+          },
+          "type_source": "palette"
+        },
+        {
+          "id": "student-stats",
+          "type": "kpi",
+          "label": "Student progress summary",
+          "hint": "Active projects, teams joined, proof entries, and portfolio views from the API",
+          "x": 3,
+          "y": 0,
+          "w": 9,
+          "h": 3,
+          "item_ref": {
+            "index": 3,
+            "text": "Connect the industry, faculty, and public experiences to the API: problem publishing and shortlisting, project discovery, mandatory reviews, funding, student registration, faculty team formation, change requests, review panels, CSR data, public portfolio slugs, and cross-role refresh behavior; finish with end-to-end authorization and workflow validation."
+          },
+          "type_source": "palette"
+        },
+        {
+          "id": "student-work",
+          "type": "list",
+          "label": "Active projects and actions",
+          "hint": "Current project activity, pending invites, reviews, and leader funding decisions",
+          "x": 3,
+          "y": 3,
+          "w": 6,
+          "h": 6,
+          "item_ref": {
+            "index": 3,
+            "text": "Connect the industry, faculty, and public experiences to the API: problem publishing and shortlisting, project discovery, mandatory reviews, funding, student registration, faculty team formation, change requests, review panels, CSR data, public portfolio slugs, and cross-role refresh behavior; finish with end-to-end authorization and workflow validation."
+          },
+          "type_source": "palette"
+        },
+        {
+          "id": "student-problems",
+          "type": "list",
+          "label": "Suggested industry problems",
+          "hint": "Searchable and filterable real problem statements",
+          "x": 9,
+          "y": 3,
+          "w": 3,
+          "h": 6,
+          "item_ref": {
+            "index": 3,
+            "text": "Connect the industry, faculty, and public experiences to the API: problem publishing and shortlisting, project discovery, mandatory reviews, funding, student registration, faculty team formation, change requests, review panels, CSR data, public portfolio slugs, and cross-role refresh behavior; finish with end-to-end authorization and workflow validation."
+          },
+          "type_source": "palette"
+        }
+      ],
+      "deleted_ids": []
+    },
+    {
+      "id": "page-148bfb00",
+      "name": "Industry workspace",
+      "route": "/industry/dashboard",
+      "item_ref": null,
+      "blocks": [
+        {
+          "id": "industry-nav",
+          "type": "sidebar",
+          "label": "Industry navigation",
+          "hint": "Dashboard, Post Problem, Discover Projects, CSR Impact",
+          "x": 0,
+          "y": 0,
+          "w": 3,
+          "h": 12,
+          "item_ref": null,
+          "type_source": "palette"
+        },
+        {
+          "id": "industry-stats",
+          "type": "kpi",
+          "label": "Industry impact summary",
+          "hint": "Problems, teams, confirmed funding, and awaiting confirmation",
+          "x": 3,
+          "y": 0,
+          "w": 9,
+          "h": 3,
+          "item_ref": null,
+          "type_source": "palette"
+        },
+        {
+          "id": "industry-projects",
+          "type": "table",
+          "label": "Projects requiring action",
+          "hint": "Funding, review status, progress, mentor, workshop, and view actions",
+          "x": 3,
+          "y": 3,
+          "w": 9,
+          "h": 7,
+          "item_ref": null,
+          "type_source": "palette"
+        }
+      ],
+      "deleted_ids": []
+    },
+    {
+      "id": "page-399b1cef",
+      "name": "Faculty workspace",
+      "route": "/faculty/dashboard",
+      "item_ref": null,
+      "blocks": [
+        {
+          "id": "faculty-nav",
+          "type": "sidebar",
+          "label": "Faculty navigation",
+          "hint": "Dashboard, Problem Statements, Students, Change Requests, Review Panel",
+          "x": 0,
+          "y": 0,
+          "w": 3,
+          "h": 12,
+          "item_ref": null,
+          "type_source": "palette"
+        },
+        {
+          "id": "faculty-stats",
+          "type": "kpi",
+          "label": "Faculty guidance summary",
+          "hint": "Mentored, active, completed, and students guided",
+          "x": 3,
+          "y": 0,
+          "w": 9,
+          "h": 3,
+          "item_ref": null,
+          "type_source": "palette"
+        },
+        {
+          "id": "faculty-work",
+          "type": "table",
+          "label": "Teams and incoming problems",
+          "hint": "Team oversight, milestone review, new briefs, and shortlisting actions",
+          "x": 3,
+          "y": 3,
+          "w": 9,
+          "h": 7,
+          "item_ref": null,
+          "type_source": "palette"
+        }
+      ],
+      "deleted_ids": []
+    },
+    {
+      "id": "page-f40adfc9",
+      "name": "Public portfolio",
+      "route": "/u/:slug",
+      "item_ref": null,
+      "blocks": [
+        {
+          "id": "portfolio-hero",
+          "type": "hero",
+          "label": "Student public profile",
+          "hint": "Virtual ID, institution, share status, and portfolio identity",
+          "x": 0,
+          "y": 0,
+          "w": 12,
+          "h": 4,
+          "item_ref": null,
+          "type_source": "palette"
+        },
+        {
+          "id": "portfolio-gallery",
+          "type": "text",
+          "label": "Project proof gallery",
+          "hint": "Stage-filtered projects with images, links, video references, and proof details",
+          "x": 0,
+          "y": 4,
+          "w": 12,
+          "h": 8,
+          "item_ref": null,
+          "type_source": "palette"
+        }
+      ],
+      "deleted_ids": []
+    }
+  ],
+  "attached_to_plan": false
+}
