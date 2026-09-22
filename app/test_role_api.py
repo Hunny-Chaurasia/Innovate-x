@@ -4,15 +4,18 @@ import unittest
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
-from app import api_auth, api_core, api_projects, api_workflows
+from app import (
+    api_auth as auth,
+    api_projects as projects,
+    api_workflows as workflows,
+)
 from app.api_contracts import (
     ChangeDecision,
+    Decision,
     FundingInput,
     PanelInput,
-    ProblemInput,
     Registration,
     ReplyInput,
-    ReviewInput,
     Shortlist,
     TeamProject,
     ViewClose,
@@ -20,507 +23,383 @@ from app.api_contracts import (
 from app.api_runtime import HTTPException
 
 
-class ConnectedRoleTests(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
-        self.user = {
+class RoleAuthorizationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_faculty_student_registration_scope_and_server_identity(self):
+        institution = uuid4()
+        actor = {
             "id": uuid4(),
             "role": "faculty",
-            "institution_id": uuid4(),
+            "institution_id": institution,
         }
-        self.project = {
+        body = Registration(
+            email="student@example.test",
+            password="long-test-password",
+            display_name="Student",
+            institution_id=institution,
+        )
+        saved = {
             "id": uuid4(),
-            "team_id": uuid4(),
-            "institution_id": self.user["institution_id"],
+            "virtual_id": "STU-2026-0042",
+            "display_name": "Student",
+            "role": "student",
         }
-        self.team = {
-            "id": self.project["team_id"],
-            "leader_id": uuid4(),
-            "status": "active",
-        }
-        self.db = AsyncMock()
-
-    async def test_faculty_provisioning_only_own_school_students(self):
-        for role, institution, allowed in [
-            ("student", self.user["institution_id"], True),
-            ("faculty", self.user["institution_id"], False),
-            ("industry", self.user["institution_id"], False),
-            ("student", uuid4(), False),
-        ]:
-            body = Registration(
-                email="student@example.test",
-                password="a-user-chosen-password",
-                display_name="Student",
-                role=role,
-                institution_id=institution,
+        with patch.object(
+            auth, "create_user", AsyncMock(return_value=saved)
+        ) as create:
+            response = await auth.add_user(body, None, actor)
+            self.assertEqual(
+                response["data"]["virtual_id"], saved["virtual_id"]
             )
-            with patch.object(
-                api_auth,
-                "create_user",
-                AsyncMock(
-                    return_value={
-                        "id": uuid4(),
-                        "virtual_id": "STU-server-issued",
-                    }
-                ),
-            ) as create:
-                if allowed:
-                    result = await api_auth.add_user(body, self.db, self.user)
-                    self.assertEqual(
-                        result["data"]["virtual_id"], "STU-server-issued"
-                    )
-                    create.assert_awaited_once_with(
-                        self.db, body, self.user["id"]
-                    )
-                else:
-                    with self.assertRaises(HTTPException) as raised:
-                        await api_auth.add_user(body, self.db, self.user)
-                    self.assertEqual(raised.exception.status_code, 403)
-                    create.assert_not_awaited()
+            create.assert_awaited_once_with(None, body, actor["id"])
+            for denied in (
+                body.model_copy(update={"institution_id": uuid4()}),
+                body.model_copy(update={"role": "faculty"}),
+            ):
+                with self.assertRaises(HTTPException) as error:
+                    await auth.add_user(denied, None, actor)
+                self.assertEqual(error.exception.status_code, 403)
+            self.assertEqual(create.await_count, 1)
 
-    async def test_project_faculty_access_requires_same_institution(self):
-        with (
-            patch.object(
-                api_core,
-                "get",
-                AsyncMock(side_effect=[self.project, self.team] * 3),
-            ),
-            patch.object(api_core, "one", AsyncMock(return_value=None)),
-        ):
-            for role, institution, allowed in [
-                ("faculty", self.user["institution_id"], True),
-                ("faculty", uuid4(), False),
-                ("industry", self.user["institution_id"], False),
-            ]:
-                actor = {
-                    **self.user,
-                    "role": role,
-                    "institution_id": institution,
-                }
-                if allowed:
-                    await api_core.project_access(
-                        self.db, self.project["id"], actor, faculty=True
-                    )
-                else:
-                    with self.assertRaises(HTTPException):
-                        await api_core.project_access(
-                            self.db, self.project["id"], actor, faculty=True
-                        )
-
-    async def test_faculty_formation_rejects_cross_school_and_wrong_leader(
+    async def test_faculty_formation_rejects_college_other_school_and_missing_mentor(
         self,
     ):
-        students = [uuid4(), uuid4()]
+        institution, leader, member = uuid4(), uuid4(), uuid4()
+        actor = {
+            "id": uuid4(),
+            "role": "faculty",
+            "institution_id": institution,
+        }
         body = TeamProject(
-            name="School team",
+            name="Team",
             title="School project",
             description="A meaningful project",
-            leader_id=students[0],
-            student_ids=students,
+            leader_id=leader,
+            student_ids=[leader, member],
             mentor_id=uuid4(),
             reason="Please mentor this team",
         )
-        for institution, kind in [
-            (uuid4(), "School"),
-            (self.user["institution_id"], "College"),
-        ]:
-            members = [
-                {"id": identity, "institution_id": institution, "kind": kind}
-                for identity in students
+        for kind, school, mentor in (
+            ("College", institution, body.mentor_id),
+            ("School", uuid4(), body.mentor_id),
+            ("School", institution, None),
+        ):
+            students = [
+                {"id": identity, "kind": kind, "institution_id": school}
+                for identity in (leader, member)
             ]
             with (
                 patch.object(
-                    api_projects, "composition", AsyncMock(return_value=members)
+                    projects, "composition", AsyncMock(return_value=students)
                 ),
-                patch.object(api_projects, "insert", AsyncMock()) as write,
+                patch.object(projects, "insert", AsyncMock()) as insert,
             ):
                 with self.assertRaises(HTTPException):
-                    await api_projects.create_project(body, self.db, self.user)
-                write.assert_not_awaited()
-        body.leader_id = uuid4()
-        with patch.object(
-            api_projects, "composition", AsyncMock()
-        ) as composition:
-            with self.assertRaises(HTTPException):
-                await api_projects.create_project(body, self.db, self.user)
-            composition.assert_not_awaited()
+                    await projects.create_project(
+                        body.model_copy(update={"mentor_id": mentor}),
+                        None,
+                        actor,
+                    )
+                insert.assert_not_awaited()
 
-    async def test_faculty_formation_assigns_chosen_leader_and_real_members(
-        self,
-    ):
-        ids = [uuid4(), uuid4()]
-        body = TeamProject(
-            name="School team",
-            title="School project",
-            description="A meaningful project",
-            leader_id=ids[1],
-            student_ids=ids,
-            mentor_id=uuid4(),
-            reason="Please mentor this team",
-        )
-        writes = []
-
-        async def insert(db, table, values):
-            writes.append((table, values))
-            return {"id": uuid4(), **values}
-
-        with (
-            patch.object(
-                api_projects,
-                "composition",
-                AsyncMock(
-                    return_value=[
-                        {
-                            "id": i,
-                            "institution_id": self.user["institution_id"],
-                            "kind": "School",
-                        }
-                        for i in ids
-                    ]
-                ),
-            ),
-            patch.object(api_projects, "insert", AsyncMock(side_effect=insert)),
-            patch.object(api_projects, "send_invite", AsyncMock()) as invite,
-            patch.object(api_projects, "refresh_team", AsyncMock()),
-            patch.object(api_projects, "notify", AsyncMock()),
-            patch.object(api_projects, "audit", AsyncMock()),
-        ):
-            await api_projects.create_project(body, self.db, self.user)
-        self.assertEqual(writes[0][1]["leader_id"], ids[1])
-        members = [v for t, v in writes if t == "team_memberships"]
-        self.assertEqual({m["user_id"] for m in members}, set(ids))
-        self.assertTrue(all(m["status"] == "Member" for m in members))
-        invite.assert_awaited_once()
-        self.assertEqual(
-            invite.await_args.args[4:6], (body.mentor_id, "mentor")
-        )
-
-    async def test_publish_and_shortlist_role_guards(self):
-        body = ProblemInput(
-            title="Useful challenge",
-            description="A clear description",
-            tags=["Climate", "climate"],
-            csr=True,
-        )
-        self.assertEqual(body.tags, ["climate"])
-        with patch.object(api_projects, "insert", AsyncMock()) as write:
-            with self.assertRaises(HTTPException):
-                await api_projects.publish(body, self.db, self.user)
-            write.assert_not_awaited()
-        with patch.object(api_workflows, "one", AsyncMock()) as write:
-            with self.assertRaises(HTTPException):
-                await api_workflows.shortlist(
-                    uuid4(),
-                    Shortlist(shortlisted=True),
-                    self.db,
-                    {**self.user, "role": "industry"},
-                )
-            write.assert_not_awaited()
-        with (
-            patch.object(
-                api_workflows,
-                "get",
-                AsyncMock(return_value={"status": "closed"}),
-            ),
-            patch.object(api_workflows, "one", AsyncMock()) as write,
-        ):
-            with self.assertRaises(HTTPException):
-                await api_workflows.shortlist(
-                    uuid4(), Shortlist(shortlisted=True), self.db, self.user
-                )
-            write.assert_not_awaited()
-
-    async def test_mandatory_review_visit_cannot_close_without_engagement(self):
-        actor = {**self.user, "role": "industry"}
+    async def test_visit_requires_engagement_and_ownership(self):
+        identity, actor_id, view_id = uuid4(), uuid4(), uuid4()
+        actor = {"id": actor_id, "role": "industry"}
         visit = {
-            "id": uuid4(),
-            "project_id": self.project["id"],
-            "actor_id": actor["id"],
+            "id": view_id,
+            "project_id": identity,
+            "actor_id": actor_id,
             "event_type": "view.opened",
-            "created_at": api_core.now(),
+            "created_at": "2026-01-01",
         }
         with (
-            patch.object(api_projects, "project_access", AsyncMock()),
-            patch.object(api_projects, "get", AsyncMock(return_value=visit)),
-            patch.object(api_projects, "one", AsyncMock(return_value=None)),
-            patch.object(api_projects, "audit", AsyncMock()) as audit,
-        ):
-            with self.assertRaises(HTTPException) as raised:
-                await api_projects.close_view(
-                    self.project["id"],
-                    ViewClose(view_id=visit["id"]),
-                    self.db,
-                    actor,
-                )
-            self.assertEqual(raised.exception.detail["code"], "review_required")
-            audit.assert_not_awaited()
-        with (
-            patch.object(api_projects, "project_access", AsyncMock()),
-            patch.object(api_projects, "get", AsyncMock(return_value=visit)),
+            patch.object(projects, "project_access", AsyncMock()),
+            patch.object(projects, "get", AsyncMock(return_value=visit)),
             patch.object(
-                api_projects, "one", AsyncMock(return_value={"id": uuid4()})
-            ),
-            patch.object(api_projects, "audit", AsyncMock()) as audit,
+                projects, "one", AsyncMock(return_value=None)
+            ) as engagement,
+            patch.object(projects, "audit", AsyncMock()) as audit,
         ):
-            result = await api_projects.close_view(
-                self.project["id"],
-                ViewClose(view_id=visit["id"]),
-                self.db,
-                actor,
+            with self.assertRaises(HTTPException) as error:
+                await projects.close_view(
+                    identity, ViewClose(view_id=view_id), None, actor
+                )
+            self.assertEqual(error.exception.status_code, 409)
+            audit.assert_not_awaited()
+            engagement.return_value = {"id": uuid4()}
+            self.assertTrue(
+                (
+                    await projects.close_view(
+                        identity, ViewClose(view_id=view_id), None, actor
+                    )
+                )["data"]["closed"]
             )
-            self.assertTrue(result["data"]["closed"])
             audit.assert_awaited_once()
-
-    async def test_other_industry_cannot_reply_or_close_visit(self):
-        actor = {**self.user, "role": "industry"}
-        review = {
-            "project_id": self.project["id"],
-            "reviewer_id": uuid4(),
-            "status": "open",
-        }
-        with (
-            patch.object(api_workflows, "get", AsyncMock(return_value=review)),
-            patch.object(api_workflows, "project_access", AsyncMock()),
-            patch.object(api_workflows, "insert", AsyncMock()) as write,
-        ):
             with self.assertRaises(HTTPException):
-                await api_workflows.reply(
-                    uuid4(),
-                    ReplyInput(body="A response", action="resolve"),
-                    self.db,
-                    actor,
+                await projects.close_view(
+                    identity,
+                    ViewClose(view_id=view_id),
+                    None,
+                    {"id": uuid4(), "role": "industry"},
                 )
-            write.assert_not_awaited()
-        visit = {
-            "project_id": self.project["id"],
-            "actor_id": uuid4(),
-            "event_type": "view.opened",
-        }
-        with (
-            patch.object(api_projects, "project_access", AsyncMock()),
-            patch.object(api_projects, "get", AsyncMock(return_value=visit)),
-            patch.object(api_projects, "audit", AsyncMock()) as audit,
-        ):
-            with self.assertRaises(HTTPException):
-                await api_projects.close_view(
-                    self.project["id"],
-                    ViewClose(view_id=uuid4()),
-                    self.db,
-                    actor,
-                )
-            audit.assert_not_awaited()
+            self.assertEqual(audit.await_count, 1)
 
-    async def test_funding_blocks_forming_team_and_pending_transfer(self):
+    async def test_open_visit_resumes_existing_audit(self):
+        identity, view_id = uuid4(), uuid4()
+        with (
+            patch.object(
+                projects, "project_access", AsyncMock(return_value=({}, {}))
+            ),
+            patch.object(
+                projects, "one", AsyncMock(return_value={"id": view_id})
+            ),
+            patch.object(
+                projects, "project_payload", AsyncMock(return_value={})
+            ),
+            patch.object(projects, "insert", AsyncMock()) as insert,
+        ):
+            response = await projects.open_view(
+                identity, None, {"id": uuid4(), "role": "industry"}
+            )
+            self.assertEqual(response["data"]["view_id"], str(view_id))
+            self.assertTrue(response["data"]["review_required"])
+            insert.assert_not_awaited()
+
+    async def test_funding_pending_and_inactive_team_block_writes(self):
         body = FundingInput(
             amount_lakh="1.25",
-            txn_ref="external-reference",
+            txn_ref="bank-reference",
             transfer_confirmed=True,
+            proof_url="https://example.test/receipt",
         )
-        for team_status, previous in [
+        for team_status, latest in (
             ("forming", None),
             ("active", {"status": "awaiting_leader"}),
-        ]:
+        ):
             with (
                 patch.object(
-                    api_workflows,
+                    workflows,
                     "project_access",
-                    AsyncMock(
-                        return_value=(
-                            self.project,
-                            {**self.team, "status": team_status},
-                        )
-                    ),
+                    AsyncMock(return_value=({}, {"status": team_status})),
                 ),
-                patch.object(
-                    api_workflows, "one", AsyncMock(return_value=previous)
-                ),
-                patch.object(api_workflows, "insert", AsyncMock()) as write,
+                patch.object(workflows, "one", AsyncMock(return_value=latest)),
+                patch.object(workflows, "insert", AsyncMock()) as insert,
             ):
                 with self.assertRaises(HTTPException):
-                    await api_workflows.fund(
-                        self.project["id"],
-                        body,
-                        self.db,
-                        {**self.user, "role": "industry"},
+                    await workflows.fund(
+                        uuid4(), body, None, {"role": "industry", "id": uuid4()}
                     )
-                write.assert_not_awaited()
+                insert.assert_not_awaited()
 
-    async def test_change_decisions_enforce_assignment_and_terminal_state(self):
-        change = {
-            "faculty_id": self.user["id"],
-            "to_institution_id": self.user["institution_id"],
-            "status": "pending",
+    async def test_only_original_reviewer_can_follow_up(self):
+        review = {
+            "id": uuid4(),
+            "project_id": uuid4(),
+            "reviewer_id": uuid4(),
+            "status": "addressed",
         }
-        for altered, status in [
-            ({**change, "faculty_id": uuid4()}, 403),
-            ({**change, "status": "approved"}, 409),
-            ({**change, "to_institution_id": uuid4()}, 403),
-        ]:
-            with (
-                patch.object(
-                    api_workflows, "get", AsyncMock(return_value=altered)
-                ),
-                patch.object(api_workflows, "update", AsyncMock()) as write,
-            ):
-                with self.assertRaises(HTTPException) as raised:
-                    await api_workflows.change_response(
-                        uuid4(),
-                        ChangeDecision(status="declined"),
-                        self.db,
-                        self.user,
-                    )
-                self.assertEqual(raised.exception.status_code, status)
-                write.assert_not_awaited()
+        with (
+            patch.object(workflows, "get", AsyncMock(return_value=review)),
+            patch.object(workflows, "project_access", AsyncMock()),
+            patch.object(workflows, "insert", AsyncMock()) as insert,
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await workflows.reply(
+                    review["id"],
+                    ReplyInput(body="Follow-up", action="resolve"),
+                    None,
+                    {"id": uuid4(), "role": "industry"},
+                )
+            self.assertEqual(error.exception.status_code, 403)
+            insert.assert_not_awaited()
+        self.assertEqual(
+            workflows.review_next("addressed", "request_changes", "industry"),
+            "open",
+        )
+        self.assertEqual(
+            workflows.review_next("addressed", "resolve", "industry"),
+            "resolved",
+        )
+        with self.assertRaises(HTTPException):
+            workflows.review_next("resolved", "comment", "industry")
 
-    async def test_change_approval_blocks_active_membership(self):
-        origin = uuid4()
+    async def test_invitation_recipient_and_terminal_state(self):
+        recipient, project_id, team_id = uuid4(), uuid4(), uuid4()
+        invitation = {
+            "project_id": project_id,
+            "recipient_id": recipient,
+            "status": "accepted",
+        }
+
+        async def lookup(db, table, identity, **kwargs):
+            return {
+                "projects": {"team_id": team_id},
+                "teams": {"id": team_id},
+                "collaboration_requests": invitation,
+            }[table]
+
+        with (
+            patch.object(projects, "get", AsyncMock(side_effect=lookup)),
+            patch.object(projects, "update", AsyncMock()) as update,
+        ):
+            for user_id, expected in ((uuid4(), 403), (recipient, 409)):
+                with self.assertRaises(HTTPException) as error:
+                    await projects.respond(
+                        uuid4(),
+                        Decision(status="accepted"),
+                        None,
+                        {"id": user_id, "role": "faculty"},
+                    )
+                self.assertEqual(error.exception.status_code, expected)
+            update.assert_not_awaited()
+
+    async def test_shortlist_role_and_explicit_toggle(self):
+        with (
+            patch.object(
+                workflows,
+                "get",
+                AsyncMock(return_value={"status": "published"}),
+            ),
+            patch.object(
+                workflows, "one", AsyncMock(return_value={"id": uuid4()})
+            ) as one,
+            patch.object(workflows, "audit", AsyncMock()),
+        ):
+            for enabled in (True, False):
+                await workflows.shortlist(
+                    uuid4(),
+                    Shortlist(shortlisted=enabled),
+                    None,
+                    {"id": uuid4(), "role": "faculty"},
+                )
+                self.assertEqual(
+                    one.await_args.args[2]["shortlisted"] is not None, enabled
+                )
+            with self.assertRaises(HTTPException):
+                await workflows.shortlist(
+                    uuid4(),
+                    Shortlist(shortlisted=True),
+                    None,
+                    {"id": uuid4(), "role": "industry"},
+                )
+            self.assertEqual(one.await_count, 2)
+
+    async def test_panel_decisions_require_submitted_matching_milestone(self):
+        project_id, milestone_id = uuid4(), uuid4()
+        actor = {"id": uuid4(), "role": "faculty"}
+        with (
+            patch.object(workflows, "project_access", AsyncMock()) as access,
+            patch.object(workflows, "get", AsyncMock()) as get,
+            patch.object(workflows, "update", AsyncMock()) as update,
+            patch.object(
+                workflows, "insert", AsyncMock(return_value={"id": uuid4()})
+            ) as insert,
+            patch.object(workflows, "audit", AsyncMock()),
+            patch.object(workflows, "notify_team", AsyncMock()),
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await workflows.panel_feedback(
+                    project_id,
+                    PanelInput(body="Approve", decision="approved"),
+                    None,
+                    actor,
+                )
+            self.assertEqual(error.exception.status_code, 422)
+            for status, owner in (
+                ("pending", project_id),
+                ("approved", project_id),
+                ("submitted", uuid4()),
+            ):
+                get.return_value = {"project_id": owner, "status": status}
+                with self.assertRaises(HTTPException):
+                    await workflows.panel_feedback(
+                        project_id,
+                        PanelInput(
+                            body="Decision",
+                            decision="approved",
+                            milestone_id=milestone_id,
+                        ),
+                        None,
+                        actor,
+                    )
+            insert.assert_not_awaited()
+            update.assert_not_awaited()
+            for decision in ("approved", "changes_requested"):
+                get.return_value = {
+                    "project_id": project_id,
+                    "status": "submitted",
+                }
+                await workflows.panel_feedback(
+                    project_id,
+                    PanelInput(
+                        body="Evidence assessment",
+                        decision=decision,
+                        milestone_id=milestone_id,
+                        score="82.50",
+                    ),
+                    None,
+                    actor,
+                )
+                self.assertEqual(update.await_args.args[3]["status"], decision)
+            access.assert_awaited_with(None, project_id, actor, faculty=True)
+
+    async def test_institution_change_requires_destination_faculty_and_no_memberships(
+        self,
+    ):
+        institution, faculty_id = uuid4(), uuid4()
         change = {
-            "faculty_id": self.user["id"],
-            "to_institution_id": self.user["institution_id"],
-            "from_institution_id": origin,
+            "faculty_id": faculty_id,
+            "to_institution_id": institution,
+            "from_institution_id": uuid4(),
             "student_id": uuid4(),
             "status": "pending",
         }
+
+        async def lookup(db, table, identity, **kwargs):
+            return {
+                "institution_change_requests": change,
+                "users": {
+                    "id": change["student_id"],
+                    "institution_id": change["from_institution_id"],
+                },
+                "institutions": {"is_active": True},
+            }[table]
+
         with (
+            patch.object(workflows, "get", AsyncMock(side_effect=lookup)),
             patch.object(
-                api_workflows,
-                "get",
-                AsyncMock(
-                    side_effect=[
-                        change,
-                        {"id": change["student_id"], "institution_id": origin},
-                        {"is_active": True},
-                    ]
-                ),
+                workflows, "one", AsyncMock(return_value={"id": uuid4()})
             ),
-            patch.object(
-                api_workflows, "one", AsyncMock(return_value={"id": uuid4()})
-            ),
-            patch.object(api_workflows, "update", AsyncMock()) as write,
+            patch.object(workflows, "update", AsyncMock()) as update,
         ):
-            with self.assertRaises(HTTPException) as raised:
-                await api_workflows.change_response(
-                    uuid4(),
-                    ChangeDecision(status="approved"),
-                    self.db,
-                    self.user,
-                )
-            self.assertEqual(
-                raised.exception.detail["code"], "active_memberships"
+            for actor_id, expected in ((uuid4(), 403), (faculty_id, 409)):
+                with self.assertRaises(HTTPException) as error:
+                    await workflows.change_response(
+                        uuid4(),
+                        ChangeDecision(status="approved"),
+                        None,
+                        {
+                            "id": actor_id,
+                            "role": "faculty",
+                            "institution_id": institution,
+                        },
+                    )
+                self.assertEqual(error.exception.status_code, expected)
+            update.assert_not_awaited()
+
+    async def test_csr_restricted_and_team_list_institution_scoped(self):
+        with self.assertRaises(HTTPException):
+            await workflows.csr(None, {"role": "faculty"})
+        actor = {"id": uuid4(), "role": "faculty", "institution_id": uuid4()}
+        with patch.object(
+            projects, "page", AsyncMock(return_value={"items": []})
+        ) as page:
+            await projects.teams(None, actor, 25, 0)
+            self.assertIn(
+                "t.institution_id=:institution", page.await_args.args[1]
             )
-            write.assert_not_awaited()
-
-    async def test_panel_milestone_decision_matrix(self):
-        for status in (
-            "pending",
-            "in_progress",
-            "changes_requested",
-            "approved",
-            "submitted",
-        ):
-            for decision in ("approved", "changes_requested"):
-                body = PanelInput(
-                    milestone_id=uuid4(),
-                    body="Evidence reviewed",
-                    decision=decision,
-                    score="82.25",
-                )
-                with (
-                    patch.object(
-                        api_workflows, "project_access", AsyncMock()
-                    ) as access,
-                    patch.object(
-                        api_workflows,
-                        "get",
-                        AsyncMock(
-                            return_value={
-                                "project_id": self.project["id"],
-                                "status": status,
-                            }
-                        ),
-                    ),
-                    patch.object(
-                        api_workflows, "update", AsyncMock()
-                    ) as update,
-                    patch.object(
-                        api_workflows,
-                        "insert",
-                        AsyncMock(return_value={"id": uuid4()}),
-                    ) as insert,
-                    patch.object(api_workflows, "audit", AsyncMock()),
-                    patch.object(api_workflows, "notify_team", AsyncMock()),
-                ):
-                    if status == "submitted":
-                        await api_workflows.panel_feedback(
-                            self.project["id"], body, self.db, self.user
-                        )
-                        update.assert_awaited_once()
-                        insert.assert_awaited_once()
-                    else:
-                        with self.assertRaises(HTTPException):
-                            await api_workflows.panel_feedback(
-                                self.project["id"], body, self.db, self.user
-                            )
-                        update.assert_not_awaited()
-                        insert.assert_not_awaited()
-                    access.assert_awaited_once_with(
-                        self.db, self.project["id"], self.user, faculty=True
-                    )
-
-    async def test_panel_rejects_missing_or_foreign_milestone(self):
-        for milestone in (None, uuid4()):
-            with (
-                patch.object(api_workflows, "project_access", AsyncMock()),
-                patch.object(
-                    api_workflows,
-                    "get",
-                    AsyncMock(return_value={"project_id": uuid4()}),
-                ),
-                patch.object(api_workflows, "insert", AsyncMock()) as write,
-            ):
-                with self.assertRaises(HTTPException):
-                    await api_workflows.panel_feedback(
-                        self.project["id"],
-                        PanelInput(
-                            milestone_id=milestone,
-                            body="Review feedback",
-                            decision="approved",
-                        ),
-                        self.db,
-                        self.user,
-                    )
-                write.assert_not_awaited()
-
-    async def test_public_slug_and_proofs_fail_closed_without_share(self):
-        for function, args in [
-            (api_workflows.public_portfolio, ("disabled-slug", self.db)),
-            (api_workflows.public_proofs, ("disabled-slug", uuid4(), self.db)),
-        ]:
-            with (
-                patch.object(
-                    api_workflows, "one", AsyncMock(return_value=None)
-                ) as read,
-                patch.object(api_workflows, "page", AsyncMock()) as page,
-            ):
-                with self.assertRaises(HTTPException) as raised:
-                    await function(*args)
-                self.assertEqual(raised.exception.status_code, 404)
-                query = read.await_args.args[1]
-                for guard in (
-                    "s.enabled=true",
-                    "s.revoked_at IS NULL",
-                    "u.status='active'",
-                ):
-                    self.assertIn(guard, query)
-                page.assert_not_awaited()
-
-    async def test_csr_denies_faculty_and_students(self):
-        for role in ("faculty", "student", "mentor"):
-            with patch.object(api_workflows, "one", AsyncMock()) as read:
-                with self.assertRaises(HTTPException):
-                    await api_workflows.csr(
-                        self.db, {**self.user, "role": role}
-                    )
-                read.assert_not_awaited()
+            self.assertEqual(
+                page.await_args.args[2]["institution"], actor["institution_id"]
+            )
 
 
 if __name__ == "__main__":

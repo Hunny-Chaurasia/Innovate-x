@@ -1,6 +1,6 @@
 # InnovateX backend API
 
-This phase supplies the API only. The existing page and React frontend are unchanged. A self-contained API catalog viewer is at `/api/docs`; the machine-readable OpenAPI 3.1 request/response catalog is `/api/openapi.json`. The viewer requires no external scripts and does not submit authenticated requests. All business routes below begin with `/api/v1`.
+Checklist item three is implemented by the student React integration documented in `app/FRONTEND_INTEGRATION.md`: all nine student overlays, an API-backed workflow compatibility facade, authenticated role-shell identities, and unauthenticated public portfolios. Restoration preserves the original workflow as a type-only contract, validates its export surface, adapts asynchronous callers, and installs a full-source TypeScript configuration. It runs before Reflex app construction without installing dependencies or building React. The UI remains a separately hosted Vite application; this student experience publishes linked external evidence rather than uploading binary media. See the integration guide for executable validation commands and coverage. A self-contained API catalog viewer is at `/api/docs`; the machine-readable OpenAPI 3.1 request/response catalog is `/api/openapi.json`. The viewer requires no external scripts and does not submit authenticated requests. All business routes below begin with `/api/v1`.
 
 ## HTTP compatibility
 

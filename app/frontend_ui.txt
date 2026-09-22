@@ -1,0 +1,69 @@
+import React, {useEffect, useRef, useState} from 'react';
+import {ApiError, Page, request, refresh} from './api';
+export const panel = 'rounded-xl border border-slate-700 bg-slate-900 p-5 text-slate-100';
+export const button = 'rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm font-medium text-slate-100 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed';
+export const input = 'w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-violet-400';
+export function useActivityRefresh() {
+  useEffect(() => {
+    let lastActive = Date.now();
+    const active = () => {lastActive = Date.now();};
+    const resume = () => {if (document.visibilityState === 'visible') {active(); refresh();}};
+    const timer = window.setInterval(() => {if (document.visibilityState === 'visible' && Date.now() - lastActive < 120000) refresh();}, 30000);
+    window.addEventListener('pointerdown', active); window.addEventListener('keydown', active); window.addEventListener('scroll', active, true);
+    window.addEventListener('focus', resume); document.addEventListener('visibilitychange', resume);
+    return () => {window.clearInterval(timer); window.removeEventListener('pointerdown', active); window.removeEventListener('keydown', active); window.removeEventListener('scroll', active, true); window.removeEventListener('focus', resume); document.removeEventListener('visibilitychange', resume);};
+  }, []);
+}
+export function useResource<T>(key: string, load: () => Promise<T>) {
+  const [state, setState] = useState<{data?: T; loading: boolean; error?: unknown}>({loading: true});
+  const loader = useRef(load); loader.current = load;
+  const previousKey = useRef(key);
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    const update = () => setRevision(v => v + 1);
+    window.addEventListener('focus', update); window.addEventListener('innovatex:refresh', update);
+    return () => {window.removeEventListener('focus', update); window.removeEventListener('innovatex:refresh', update);};
+  }, []);
+  useEffect(() => {
+    let current = true;
+    const changed = previousKey.current !== key; previousKey.current = key;
+    setState(old => changed ? {loading: true} : {...old, loading: true, error: undefined});
+    loader.current().then(data => {if (current) setState({data, loading: false});}).catch(error => {if (current) setState(old => ({...old, loading: false, error}));});
+    return () => {current = false;};
+  }, [key, revision]);
+  return {...state, retry: () => setRevision(v => v + 1)};
+}
+export function ErrorMessage({error}: {error: unknown}) {
+  return <div role="alert" className="rounded-lg border border-red-900 bg-red-950 p-3 text-sm text-red-200"><p>{error instanceof Error ? error.message : 'Unable to complete this action.'}</p>{error instanceof ApiError && <><p>{error.status === 403 ? 'You do not have permission to perform this action.' : error.status === 409 ? 'This record changed or this transition is not available. Refresh to see its current state.' : ''}</p>{error.details.map((d, i) => <p key={i}>{d.loc?.join('.')}: {d.msg}</p>)}{error.requestId && <small>Reference: {error.requestId}</small>}</>}</div>;
+}
+export function Boundary<T>({resource, children}: {resource: ReturnType<typeof useResource<T>>; children: (data: T) => React.ReactNode}) {
+  if (resource.loading && resource.data === undefined) return <p role="status" className="animate-pulse p-5 text-slate-400">Loading current records…</p>;
+  if (resource.error && resource.data === undefined) return <div className="space-y-3"><ErrorMessage error={resource.error}/><button className={button} onClick={resource.retry}>Retry</button></div>;
+  if (resource.data === undefined) return <p>No records available.</p>;
+  return <>{resource.error !== undefined && <ErrorMessage error={resource.error}/>} {children(resource.data)}</>;
+}
+export function Form({children, onSubmit, label = 'Save', reset = false}: {children: React.ReactNode; onSubmit: (form: FormData) => Promise<unknown>; label?: string; reset?: boolean}) {
+  const [pending, setPending] = useState(false); const [error, setError] = useState<unknown>(); const [success, setSuccess] = useState(false);
+  const busy = useRef(false);
+  return <form className="space-y-3" onChange={() => setSuccess(false)} onSubmit={async event => {
+    event.preventDefault(); if (busy.current || success) return;
+    const element = event.currentTarget; const data = new FormData(element);
+    busy.current = true; setPending(true); setError(undefined); setSuccess(false);
+    try {await onSubmit(data); setSuccess(true); if (reset) element.reset(); refresh();}
+    catch (failure) {setError(failure);} finally {busy.current = false; setPending(false);}
+  }}><fieldset disabled={pending} className="space-y-3">{children}<button type="submit" disabled={success} className={button}>{pending ? 'Saving…' : label}</button></fieldset>{error !== undefined && <ErrorMessage error={error}/>} {success && <p role="status" className="text-sm text-green-400">Saved successfully.</p>}</form>;
+}
+export function Field({name, label, type = 'text', value, minLength, required = true}: {name: string; label: string; type?: string; value?: string; minLength?: number; required?: boolean}) {
+  return <label className="block space-y-1 text-sm text-slate-300"><span>{label}</span><input className={input} name={name} type={type} defaultValue={value} required={required} minLength={minLength}/></label>;
+}
+export function Select({name, label, children, value, required = true}: {name: string; label: string; children: React.ReactNode; value?: string; required?: boolean}) {
+  return <label className="block space-y-1 text-sm text-slate-300"><span>{label}</span><span className="relative block"><select className={`${input} appearance-none pr-8`} name={name} defaultValue={value} required={required}>{children}</select><span className="pointer-events-none absolute right-3 top-2">⌄</span></span></label>;
+}
+export const text = (form: FormData, name: string): string => String(form.get(name) || '');
+export function Chip({children}: {children: React.ReactNode}) {return <span className="inline-block w-fit rounded-full border border-violet-700 bg-violet-950 px-2 py-1 text-xs text-violet-200">{children}</span>;}
+export function Records<T extends {id: string}>({path, render, publicRequest = false}: {path: string; render: (row: T) => React.ReactNode; publicRequest?: boolean}) {
+  const [offset, setOffset] = useState(0);
+  const resource = useResource<Page<T>>(`${path}:${offset}`, () => request<Page<T>>(`${path}${path.includes('?') ? '&' : '?'}limit=25&offset=${offset}`, {public: publicRequest}));
+  useEffect(() => {setOffset(0);}, [path]);
+  return <Boundary resource={resource}>{page => <div className="space-y-4">{!page.items.length && <p className="p-5 text-sm text-slate-400">No records yet.</p>}{page.items.map(row => <div key={row.id}>{render(row)}</div>)}<div className="flex items-center gap-3 text-sm text-slate-400"><button className={button} disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 25))}>Previous</button><span>{page.total ? offset + 1 : 0}–{Math.min(offset + 25, page.total)} of {page.total}</span><button className={button} disabled={offset + 25 >= page.total} onClick={() => setOffset(offset + 25)}>Next</button></div></div>}</Boundary>;
+}

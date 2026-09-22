@@ -1,8 +1,3 @@
-*.py[cod]
-assets/external/
-.states
-.web
-*.db
 __pycache__/
 .web/
 .states/

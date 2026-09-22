@@ -553,8 +553,12 @@ async def teams(db: DB, user: Actor, limit: Limit = 25, offset: Offset = 0):
     return await page(
         db,
         """SELECT t.id,t.name,t.leader_id,t.formed_by,t.institution_id,t.status,t.created_at FROM teams t
-        WHERE t.created_by_id=:u OR EXISTS (SELECT 1 FROM team_memberships m WHERE m.team_id=t.id AND m.user_id=:u AND m.status IN ('Member','Invited'))""",
-        {"u": user["id"]},
+WHERE t.created_by_id=:u OR (:role='faculty' AND t.institution_id=:institution) OR EXISTS (SELECT 1 FROM team_memberships m WHERE m.team_id=t.id AND m.user_id=:u AND m.status IN ('Member','Invited'))""",
+        {
+            "u": user["id"],
+            "role": user["role"],
+            "institution": user["institution_id"],
+        },
         limit,
         offset,
     )

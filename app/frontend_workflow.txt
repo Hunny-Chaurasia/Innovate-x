@@ -1,0 +1,78 @@
+import {useEffect, useSyncExternalStore} from 'react';
+import type * as Contract from './workflow.contract';
+import {get, request, write, refresh, session, currentUser, type Page, type User, type Project, type Problem, type Funding, type Review, type Proof, type Share} from '../live/api';
+export type {CollabRequest, FundingRecord, FundingStatus, InstitutionType, NewCollabRequest, Party, Person, ProblemStatement, ProjectReview, ProofAttachment, ProofEntry, RegisteredStudent, RequestStatus, ReviewReply, ReviewStatus, ShareProfile, StudentProject, TeamMember} from './workflow.contract';
+type Row = Record<string, unknown>;
+type Args<K extends keyof typeof Contract> = typeof Contract[K] extends (...args: infer A) => unknown ? A : never;
+type Returns<K extends keyof typeof Contract> = typeof Contract[K] extends (...args: never[]) => infer R ? R : never;
+const row = (value: unknown): Row => value && typeof value === 'object' ? value as Row : {};
+const str = (value: unknown): string => typeof value === 'string' ? value : '';
+const id = (value: unknown): string => typeof value === 'string' ? value : str(row(value).id);
+const list = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
+function person(user: User): Contract.Person {return {...user, name: user.display_name, virtualId: user.virtual_id, institution: user.institution_id || user.organization || '', institutionId: user.institution_id, avatar: user.avatar_url || '', avatarUrl: user.avatar_url || ''} as unknown as Contract.Person;}
+export let CONTACTS = [] as unknown as typeof Contract.CONTACTS;
+export let TEAM_DIRECTORY = {} as typeof Contract.TEAM_DIRECTORY;
+export let CURRENT_STUDENT = {} as typeof Contract.CURRENT_STUDENT;
+export let CURRENT_FACULTY = {} as typeof Contract.CURRENT_FACULTY;
+export let CURRENT_INDUSTRY = {} as typeof Contract.CURRENT_INDUSTRY;
+let data: Row = empty();
+let pending = 0;
+let error: unknown;
+let revision = 0;
+let generation = 0;
+const listeners = new Set<() => void>();
+function empty(): Row {return {fundings: [], funding: [], reviews: [], replies: [], proofs: [], problems: [], projects: [], requests: [], collabRequests: [], students: [], registeredStudents: [], profiles: {}, shareProfiles: {}, seenProblems: [], seenProblemIds: [], shortlistedProblems: [], shortlistedProblemIds: []};}
+function emit(): void {revision++; listeners.forEach(fn => fn()); window.dispatchEvent(new CustomEvent('innovatex:workflow', {detail: {pending, error, revision}}));}
+function subscribe(fn: () => void): () => void {listeners.add(fn); return () => {listeners.delete(fn);};}
+function normalized(value: unknown): Row {const source = row(value); const output: Row = {...source}; for (const [key, value] of Object.entries(source)) output[key.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())] = value; return output;}
+async function all<T>(path: string): Promise<T[]> {const result: T[] = []; for (let offset = 0; offset <= 100000; offset += 100) {const page = await request<Page<T>>(`${path}${path.includes('?') ? '&' : '?'}limit=100&offset=${offset}`); result.push(...page.items); if (offset + page.items.length >= page.total || !page.items.length) break;} return result;}
+async function load(): Promise<void> {
+  const ticket = ++generation;
+  if (!session()) {data = empty(); CONTACTS = [] as unknown as typeof CONTACTS; TEAM_DIRECTORY = {} as typeof TEAM_DIRECTORY; CURRENT_STUDENT = {} as typeof CURRENT_STUDENT; CURRENT_FACULTY = {} as typeof CURRENT_FACULTY; CURRENT_INDUSTRY = {} as typeof CURRENT_INDUSTRY; error = undefined; emit(); return;}
+  pending++; error = undefined; emit();
+  try {
+    const user = await get<User>('/auth/me');
+    const [users, projects, problems, requests, reviews, fundings, teams] = await Promise.all([all<User>('/users'), all<Project>('/projects'), all<Problem>('/problems'), all<Row>('/requests'), user.role === 'student' || user.role === 'industry' ? all<Review>('/reviews') : Promise.resolve([]), ['student', 'industry', 'admin'].includes(user.role) ? all<Funding>('/funding') : Promise.resolve([]), all<Row>('/teams')]);
+    const share = user.role === 'student' ? await get<Share | null>('/portfolio/share') : null;
+    const proofs = user.role === 'student' ? (await Promise.all(projects.map(p => all<Proof>(`/projects/${p.id}/proofs`)))).flat() : [];
+    if (ticket !== generation) return;
+    CONTACTS = users.map(person) as unknown as typeof CONTACTS;
+    const mapped = person(user);
+    CURRENT_STUDENT = (user.role === 'student' ? mapped : {}) as typeof CURRENT_STUDENT;
+    CURRENT_FACULTY = (user.role === 'faculty' ? mapped : {}) as typeof CURRENT_FACULTY;
+    CURRENT_INDUSTRY = (user.role === 'industry' ? mapped : {}) as typeof CURRENT_INDUSTRY;
+    TEAM_DIRECTORY = Object.fromEntries(teams.map(t => [str(t.name), {...normalized(t), leader: users.map(person).find(p => id(p) === t.leader_id), members: list(t.members).map(normalized)}])) as unknown as typeof TEAM_DIRECTORY;
+    data = {...empty(), projects: projects.map(p => ({...normalized(p), team: p.team_name, members: list(row(TEAM_DIRECTORY)[p.team_name] && row(row(TEAM_DIRECTORY)[p.team_name]).members)})), problems: problems.map(normalized), requests: requests.map(normalized), collabRequests: requests.map(normalized), reviews: reviews.map(r => ({...normalized(r), replies: []})), fundings: fundings.map(normalized), funding: fundings.map(normalized), proofs: proofs.map(normalized), students: users.filter(u => u.role === 'student').map(person), registeredStudents: users.filter(u => u.role === 'student').map(person), profiles: share ? {[user.id]: normalized(share)} : {}, shareProfiles: share ? {[user.id]: normalized(share)} : {}};
+  } catch (failure) {if (ticket === generation) error = failure;}
+  finally {pending--; emit();}
+}
+window.addEventListener('innovatex:refresh', () => {void load();});
+window.addEventListener('innovatex:session', () => {void load();});
+window.addEventListener('focus', () => {void load();});
+export function useWorkflow(): ReturnType<typeof Contract.useWorkflow> & {pending: boolean; error: unknown; refresh: () => void} {useSyncExternalStore(subscribe, () => revision); useEffect(() => {void load();}, []); return {...data, pending: pending > 0, error, refresh} as ReturnType<typeof Contract.useWorkflow> & {pending: boolean; error: unknown; refresh: () => void};}
+export function useAllProblems(): ReturnType<typeof Contract.useAllProblems> {useWorkflow(); return data.problems as ReturnType<typeof Contract.useAllProblems>;}
+async function mutate<T>(operation: () => Promise<T>): Promise<T> {pending++; error = undefined; emit(); try {const result = await operation(); refresh(); return result;} catch (failure) {error = failure; emit(); throw failure;} finally {pending--; emit();}}
+async function save<K extends keyof typeof Contract>(path: string, body?: unknown, method: 'POST' | 'PUT' | 'DELETE' = 'POST'): Promise<Returns<K>> {return mutate(async () => normalized(await write(path, body, method)) as Returns<K>);}
+export async function submitFunding(...args: Args<'submitFunding'>): Promise<Returns<'submitFunding'>> {const a = row(args[0]); if (a.proofFile) throw new Error('Use a durable external proof URL rather than a local file.'); return save<'submitFunding'>(`/projects/${id(a.project)}/funding`, {amount_lakh: String(a.amountLakh), txn_ref: a.txnRef, transfer_confirmed: true, proof_url: a.proofUrl || null});}
+export async function respondFunding(...args: Args<'respondFunding'>): Promise<Returns<'respondFunding'>> {const a: unknown[] = args; return save<'respondFunding'>(`/funding/${id(a[0])}/respond`, {status: a[1], receipt_confirmed: a[1] === 'confirmed', decline_note: a[2] || ''});}
+export function latestFunding(...args: Args<'latestFunding'>): Returns<'latestFunding'> {const a: unknown[] = args; return list(a[0]).filter(f => row(f).projectId === a[1]).sort((a, b) => str(row(b).createdAt).localeCompare(str(row(a).createdAt)) || id(b).localeCompare(id(a)))[0] as Returns<'latestFunding'>;}
+export async function addReview(...args: Args<'addReview'>): Promise<Returns<'addReview'>> {const a = row(args[0]); return save<'addReview'>(`/projects/${id(a.projectId)}/reviews`, {summary: a.summary, strengths: a.strengths || '', flaws: a.flaws, improvements: a.improvements});}
+export async function addReply(...args: Args<'addReply'>): Promise<Returns<'addReply'>> {const a: unknown[] = args; const reply = row(a[1]); const action = a[2] === 'resolved' ? 'resolve' : a[2] === 'addressed' ? 'changes_done' : a[2] === 'open' ? 'request_changes' : 'comment'; return save<'addReply'>(`/reviews/${id(a[0])}/replies`, {body: reply.text || reply.body, action});}
+export async function addProof(...args: Args<'addProof'>): Promise<Returns<'addProof'>> {const a = row(args[0]); return save<'addProof'>(`/projects/${id(a.projectId)}/proofs`, {title: a.title, description: a.description || '', attachments: list(a.attachments).map(v => ({kind: row(v).kind || row(v).type, url: row(v).url, name: row(v).name || '', source: 'external'}))});}
+export async function removeProof(...args: Args<'removeProof'>): Promise<Returns<'removeProof'>> {return save<'removeProof'>(`/proofs/${id(args[0])}`, undefined, 'DELETE');}
+export async function publishProblem(...args: Args<'publishProblem'>): Promise<Returns<'publishProblem'>> {const a = row(args[0]); return save<'publishProblem'>('/problems', {title: a.title, description: a.description, domain: a.domain, tags: a.tags || [], csr: Boolean(a.csr), source: 'industry', status: 'published'});}
+export async function markProblemSeen(...args: Args<'markProblemSeen'>): Promise<Returns<'markProblemSeen'>> {return mutate(async () => await get(`/problems/${id(args[0])}`) as Returns<'markProblemSeen'>);}
+export async function toggleShortlist(...args: Args<'toggleShortlist'>): Promise<Returns<'toggleShortlist'>> {const problem = id(args[0]); return mutate(async () => {const selected = await all<Problem>('/problems?view=shortlisted'); return await write(`/problems/${problem}/shortlist`, {shortlisted: !selected.some(p => p.id === problem)}, 'PUT') as Returns<'toggleShortlist'>;});}
+export async function createProject(...args: Args<'createProject'>): Promise<Returns<'createProject'>> {const a = row(args[0]); return mutate(async () => {const p = await write<Project>('/projects', {name: a.teamName || a.team, title: a.title, description: a.description, category: a.category || a.domain, leader_id: a.leaderId || currentUser()?.id, student_ids: list(a.members).map(id), ...(a.mentorId ? {mentor_id: a.mentorId} : {}), ...(a.problemId ? {problem_id: a.problemId} : {}), reason: a.reason || a.description}); return p.id as Returns<'createProject'>;});}
+export async function addRequests(...args: Args<'addRequests'>): Promise<Returns<'addRequests'>> {return mutate(async () => {for (const value of list(args[0])) {const a = row(value); await write(`/projects/${id(a.projectId)}/requests`, {recipient_id: a.recipientId || a.toId || id(a.to), kind: a.kind || (a.type === 'mentor' ? 'mentor' : 'member'), reason: a.reason || a.message});} return undefined as Returns<'addRequests'>;});}
+export async function respondCollab(...args: Args<'respondCollab'>): Promise<Returns<'respondCollab'>> {const a: unknown[] = args; return save<'respondCollab'>(`/requests/${id(a[0])}/respond`, {status: a[1], note: a[2] || ''});}
+export function teamFormationRule(...args: Args<'teamFormationRule'>): Returns<'teamFormationRule'> {const members = list(args[0]).map(row); const school = members.length > 0 && members.every(m => m.institutionType === 'School'); const same = new Set(members.map(m => m.institutionId || m.institution)).size === 1; return {formedBy: school && same ? 'faculty' : 'student', note: school ? 'School-only teams require an accepted mentor.' : 'Students form college and cross-institution teams.'} as Returns<'teamFormationRule'>;}
+export function ensureProfile(...args: Args<'ensureProfile'>): Returns<'ensureProfile'> {return (row(data.profiles)[id(args[0])] || {id: id(args[0]), studentId: id(args[0]), slug: '', enabled: false, views: 0, viewCount: 0}) as Returns<'ensureProfile'>;}
+export async function setProfileEnabled(...args: Args<'setProfileEnabled'>): Promise<Returns<'setProfileEnabled'>> {return save<'setProfileEnabled'>('/portfolio/share', {enabled: Boolean(args[1]), regenerate: false}, 'PUT');}
+export async function regenerateSlug(..._args: Args<'regenerateSlug'>): Promise<Returns<'regenerateSlug'>> {return mutate(async () => {const share = await get<Share | null>('/portfolio/share'); const result = await write<Share>('/portfolio/share', {enabled: share?.enabled || false, regenerate: true}, 'PUT'); return result.slug as unknown as Returns<'regenerateSlug'>;});}
+export function publicProfileUrl(...args: Args<'publicProfileUrl'>): Returns<'publicProfileUrl'> {return `${window.location.origin}${window.location.hash.startsWith('#/') ? '/#' : ''}/u/${encodeURIComponent(str(args[0]))}` as Returns<'publicProfileUrl'>;}
+export async function registerStudent(...args: Args<'registerStudent'>): Promise<Returns<'registerStudent'>> {const a = row(args[0]); return save<'registerStudent'>('/users', {email: a.email, password: a.password, display_name: a.name || a.displayName, role: 'student', institution_id: a.institutionId || currentUser()?.institution_id});}
+export function getTeamLeader(...args: Args<'getTeamLeader'>): Returns<'getTeamLeader'> {return row(row(TEAM_DIRECTORY)[str(args[0])]).leader as Returns<'getTeamLeader'>;}
+export function isMemberOf(...args: Args<'isMemberOf'>): Returns<'isMemberOf'> {return list(row(row(TEAM_DIRECTORY)[str(args[0])]).members).some(m => id(m) === args[1]) as Returns<'isMemberOf'>;}
+export function slugify(...args: Args<'slugify'>): Returns<'slugify'> {return str(args[0]).toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') as Returns<'slugify'>;}
+export function timeAgo(...args: Args<'timeAgo'>): Returns<'timeAgo'> {const delta = Math.max(0, Date.now() - new Date(str(args[0])).getTime()); return (delta < 60000 ? 'Just now' : delta < 3600000 ? `${Math.floor(delta / 60000)}m ago` : delta < 86400000 ? `${Math.floor(delta / 3600000)}h ago` : `${Math.floor(delta / 86400000)}d ago`) as Returns<'timeAgo'>;}

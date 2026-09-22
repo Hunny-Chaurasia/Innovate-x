@@ -1,0 +1,123 @@
+import type {ShellUser} from './shell.contract';
+export type Role = 'student' | 'faculty' | 'industry' | 'mentor' | 'admin';
+export type Stage = 'Ideation' | 'Building' | 'Prototype' | 'Completed';
+export interface User { id: string; display_name: string; virtual_id: string; role: Role; institution_id: string | null; organization: string; email?: string; bio?: string; department?: string; linkedin_url?: string | null; avatar_url?: string | null; institution_name?: string; institution_kind?: 'School' | 'College' }
+export interface Institution { id: string; name: string; kind: 'School' | 'College' }
+export interface Project { id: string; title: string; description?: string; category: string; stage: Stage; display_stage?: string; progress: number; team_id: string; leader_id: string; team_name: string; team_status: string; created_at: string }
+export interface Membership { id: string; user_id: string; status: string; display_name?: string; virtual_id?: string }
+export interface Workspace extends Project { team: { id: string; name: string; leader_id: string; status: string }; memberships: Membership[]; mentor_id: string | null }
+export interface Problem { publisher_id?: string; seen_at?: string | null; shortlisted_at?: string | null; id: string; title: string; description: string; domain: string; source: string; csr: boolean; tags: string[]; status: string }
+export interface Invitation { id: string; project_id: string; sender_id: string; recipient_id: string; kind: string; reason: string; status: string; response_note: string }
+export interface Review { id: string; project_id: string; reviewer_id: string; summary: string; strengths?: string; flaws?: string; improvements?: string; status: string }
+export interface Reply { id: string; author_role: string; body: string; action: string; created_at: string }
+export interface Funding { id: string; project_id: string; leader_id: string; amount_lakh: string; status: string; txn_ref: string; decline_note: string; proof_url?: string | null }
+export interface Attachment { kind: 'image' | 'link' | 'video'; url: string; name: string; source?: 'external' }
+export interface Proof { id: string; project_id?: string; author_id?: string; title: string; description: string; attachments: Attachment[]; created_at: string }
+export interface Notification { id: string; title: string; body: string; read_at: string | null; project_id: string | null }
+export interface Share { id: string; slug: string; enabled: boolean; view_count: number }
+export interface Activity { id: string; description: string; created_at: string }
+export interface Change { student_id?: string; faculty_id?: string; to_institution_id?: string; id: string; reason: string; status: string; response_note: string }
+export interface Visit { view_id: string; review_required: boolean; project: Workspace }
+export interface Team { id: string; name: string; status: string; leader_id: string }
+export interface Milestone { id: string; title: string; description: string; status: string; due_at: string | null }
+export interface PanelFeedback { id: string; body: string; decision: string; score: string | null; milestone_id: string | null }
+export interface CSR { projects_funded: number; confirmed_amount_lakh: string; awaiting_amount_lakh: string; students_reached: number }
+export interface Page<T> { items: T[]; total: number; limit: number; offset: number }
+export interface Result<T> { data: T }
+export interface PublicPortfolio { profile: { display_name: string; bio: string; institution: string | null }; projects: Page<Project> }
+export interface SessionResult { access_token: string; expires_at: string; user: User }
+export interface Session { token: string; expires: string }
+export interface ErrorDetail { loc?: (string | number)[]; msg?: string; type?: string }
+export class ApiError extends Error {
+  constructor(public status: number, public code: string, message: string, public details: ErrorDetail[] = [], public requestId = '') { super(message); this.name = 'ApiError'; }
+}
+let identity: User | undefined;
+export function currentUser(): User | undefined {return identity;}
+export function setShellUser(user?: User): void {identity = user; window.dispatchEvent(new Event('innovatex:identity'));}
+export function currentShellUser(role?: string): ShellUser {
+  if (!identity || (role && identity.role !== role)) throw new Error('An authenticated matching shell identity is required.');
+  const initials = identity.display_name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase();
+  return {...identity, name: identity.display_name, displayName: identity.display_name, virtualId: identity.virtual_id, institution: identity.institution_name || identity.institution_id || identity.organization, institutionType: identity.institution_kind, organization: identity.organization, avatar: identity.avatar_url || initials, avatarUrl: identity.avatar_url || '', initials} as unknown as ShellUser;
+}
+export async function validateSession(): Promise<User> {
+  const user = await get<User>('/auth/me');
+  if (user.institution_id) {
+    for (let offset = 0; offset <= 100000; offset += 100) {
+      const page = await request<Page<Institution>>(`/institutions?limit=100&offset=${offset}`, {public: true});
+      const institution = page.items.find(i => i.id === user.institution_id);
+      if (institution) {user.institution_name = institution.name; user.institution_kind = institution.kind; break;}
+      if (offset + page.items.length >= page.total || !page.items.length) break;
+    }
+  }
+  setShellUser(user); return user;
+}
+const storageKey = 'innovatex.session.v1';
+let memory: Session | null = null;
+export function session(): Session | null {
+  try {
+    const raw: unknown = JSON.parse(sessionStorage.getItem(storageKey) || 'null');
+    if (raw && typeof raw === 'object' && 'token' in raw && 'expires' in raw && typeof raw.token === 'string' && typeof raw.expires === 'string') memory = {token: raw.token, expires: raw.expires};
+  } catch { /* Storage may be disabled; memory-only sessions still work. */ }
+  if (memory && !(Date.parse(memory.expires) > Date.now())) { clearSession(); return null; }
+  return memory;
+}
+export function clearSession(): void {
+  memory = null;
+  setShellUser();
+  try { sessionStorage.removeItem(storageKey); } catch { /* Storage unavailable. */ }
+  window.dispatchEvent(new Event('innovatex:session'));
+}
+export function saveSession(value: SessionResult): void {
+  setShellUser(value.user);
+  memory = { token: value.access_token, expires: value.expires_at };
+  try { sessionStorage.setItem(storageKey, JSON.stringify(memory)); } catch { /* Memory fallback. */ }
+  window.dispatchEvent(new Event('innovatex:session'));
+}
+const configured = (import.meta.env.VITE_API_URL as string | undefined) || '/api/v1';
+const base = new URL(configured.replace(/\/$/, '') + '/', window.location.origin);
+if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password || base.search || base.hash) throw new Error('Invalid VITE_API_URL');
+export const refresh = (): void => { window.dispatchEvent(new Event('innovatex:refresh')); };
+export async function request<T>(path: string, options: { method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: unknown; public?: boolean } = {}): Promise<T> {
+  if (!path.startsWith('/') || path.startsWith('//') || path.includes('..') || path.includes('\\')) throw new ApiError(0, 'invalid_path', 'Invalid API path');
+  const method = options.method || 'GET';
+  const publicAllowed = (method === 'GET' && (path.startsWith('/institutions') || path.startsWith('/public/portfolios/'))) || (method === 'POST' && ['/auth/login', '/auth/register'].includes(path));
+  if (options.public && !publicAllowed) throw new ApiError(0, 'invalid_public_request', 'This operation requires a session');
+  const auth = options.public ? null : session();
+  if (!options.public && !auth) throw new ApiError(401, 'session_expired', 'Your session has expired. Sign in again.');
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(new URL(path.slice(1), base), {
+      method, credentials: 'omit', cache: 'no-store', redirect: 'error', signal: controller.signal,
+      headers: { Accept: 'application/json', ...(options.body === undefined ? {} : {'Content-Type': 'application/json'}), ...(auth ? {Authorization: `Bearer ${auth.token}`} : {}) },
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    });
+    const payload: unknown = await response.json().catch(() => null);
+    if (!response.ok) {
+      if (response.status === 401 && auth && memory?.token === auth.token) clearSession();
+      const envelope = payload as {error?: {code?: string; message?: string; details?: ErrorDetail[]}; request_id?: string} | null;
+      throw new ApiError(response.status, envelope?.error?.code || 'request_failed', envelope?.error?.message || `Request failed (${response.status})`, envelope?.error?.details || [], envelope?.request_id || '');
+    }
+    if (!payload || typeof payload !== 'object' || (!('data' in payload) && !('items' in payload))) throw new ApiError(0, 'invalid_response', 'The server returned an unexpected response.');
+    if (method !== 'GET' && !options.public) refresh();
+    return payload as T;
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(0, controller.signal.aborted ? 'timeout' : 'network_error', controller.signal.aborted ? 'Request timed out. Refresh before retrying a write; it may have completed.' : 'Unable to reach the service. Check your connection and retry.');
+  } finally { window.clearTimeout(timeout); }
+}
+export async function get<T>(path: string, isPublic = false): Promise<T> { return (await request<Result<T>>(path, {public: isPublic})).data; }
+export async function write<T = unknown>(path: string, body?: unknown, method: 'POST' | 'PUT' | 'PATCH' | 'DELETE' = 'POST'): Promise<T> { return (await request<Result<T>>(path, {method, body})).data; }
+export async function login(email: string, password: string): Promise<User> {
+  const value = (await request<Result<SessionResult>>('/auth/login', {method: 'POST', body: {email, password}, public: true})).data;
+  saveSession(value); return value.user;
+}
+export async function register(body: {email: string; password: string; display_name: string; role: 'admin' | 'student'; institution_id?: string}): Promise<User> {
+  const value = (await request<Result<SessionResult>>('/auth/register', {method: 'POST', body, public: true})).data;
+  saveSession(value); return value.user;
+}
+export async function logout(): Promise<void> { try { await write('/auth/logout'); } finally { clearSession(); } }
+export function safeLink(value: string): string | undefined {
+  try { const url = new URL(value); return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? url.href : undefined; } catch { return undefined; }
+}
+export const domains = ['Technology', 'Healthcare', 'Education', 'Environment', 'Finance', 'Agriculture', 'Logistics'];

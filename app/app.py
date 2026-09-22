@@ -3,6 +3,8 @@ import reflex as rx
 from app.api import api
 from app.frontend_restore import restore_frontend
 
+restore_frontend()
+
 
 def index() -> rx.Component:
     return rx.el.main(
@@ -29,8 +31,6 @@ def index() -> rx.Component:
         class_name="font-['Inter'] bg-white",
     )
 
-
-restore_frontend()
 
 app = rx.App(
     api_transformer=api,
